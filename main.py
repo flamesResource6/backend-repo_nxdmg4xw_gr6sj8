@@ -84,9 +84,31 @@ MODEL_REGISTRY: List[ModelInfo] = [
 ]
 
 
+def _provider_status() -> Dict[str, bool]:
+    return {
+        "demo": True,
+        "openai": bool(os.getenv("OPENAI_API_KEY")) and (OpenAI is not None),
+        "anthropic": bool(os.getenv("ANTHROPIC_API_KEY")) and (anthropic is not None),
+        "google": bool(os.getenv("GOOGLE_API_KEY")) and (genai is not None),
+        "huggingface": bool(os.getenv("HUGGINGFACE_API_KEY")),
+    }
+
+
+@app.get("/api/providers")
+def providers():
+    status = _provider_status()
+    # redact values: just booleans
+    return {"providers": status}
+
+
 @app.get("/api/models")
-def list_models(q: Optional[str] = None, limit: int = 200):
+def list_models(q: Optional[str] = None, limit: int = 200, hide_unconfigured: bool = True):
     items = MODEL_REGISTRY
+
+    if hide_unconfigured:
+        status = _provider_status()
+        items = [m for m in items if status.get(m.provider, False)]
+
     if q:
         ql = q.lower()
         items = [m for m in items if ql in m.id.lower() or ql in (m.name.lower()) or ql in m.provider.lower()]

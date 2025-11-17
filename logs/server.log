@@ -1,7 +1,15 @@
 INFO:     Will watch for changes in these directories: ['/home/workspace']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [466] using StatReload
-INFO:     Started server process [468]
+INFO:     Started reloader process [549] using StatReload
+INFO:     Started server process [551]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     172.20.0.1:44846 - "HEAD / HTTP/1.1" 405 Method Not Allowed
+INFO:     172.20.0.1:60912 - "HEAD / HTTP/1.1" 405 Method Not Allowed
+INFO:     172.20.0.1:60930 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:60930 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:60920 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:60920 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:52400 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:52410 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:52400 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:52410 - "GET /api/models HTTP/1.1" 200 OK
