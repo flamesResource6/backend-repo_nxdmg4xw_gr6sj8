@@ -3,11 +3,27 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, AsyncGenerator
 import requests
 
 from database import create_document, get_documents, db
 from schemas import ChatRequest, ChatResponse, Conversation, Message
+
+# Optional provider SDKs
+try:
+    from openai import OpenAI  # type: ignore
+except Exception:
+    OpenAI = None  # type: ignore
+
+try:
+    import anthropic  # type: ignore
+except Exception:
+    anthropic = None  # type: ignore
+
+try:
+    import google.generativeai as genai  # type: ignore
+except Exception:
+    genai = None  # type: ignore
 
 app = FastAPI(title="Multi-Model Chat API")
 
@@ -39,10 +55,21 @@ class ModelInfo(BaseModel):
     context_length: Optional[int] = None
 
 
-# Expanded starter set; can be extended to your full catalog
+# Expanded catalog across providers
 MODEL_REGISTRY: List[ModelInfo] = [
     ModelInfo(id="echo:mini", name="Echo Mini (Demo)", provider="demo", description="Replies with what you say (for testing)."),
-    # Hugging Face - popular instruct/chat models
+    # OpenAI
+    ModelInfo(id="openai:gpt-4o", name="GPT-4o", provider="openai"),
+    ModelInfo(id="openai:gpt-4o-mini", name="GPT-4o Mini", provider="openai"),
+    ModelInfo(id="openai:gpt-4.1", name="GPT-4.1", provider="openai"),
+    # Anthropic
+    ModelInfo(id="anthropic:claude-3-5-sonnet-20240620", name="Claude 3.5 Sonnet", provider="anthropic"),
+    ModelInfo(id="anthropic:claude-3-opus-20240229", name="Claude 3 Opus", provider="anthropic"),
+    ModelInfo(id="anthropic:claude-3-haiku-20240307", name="Claude 3 Haiku", provider="anthropic"),
+    # Google Gemini
+    ModelInfo(id="google:gemini-1.5-pro", name="Gemini 1.5 Pro", provider="google"),
+    ModelInfo(id="google:gemini-1.5-flash", name="Gemini 1.5 Flash", provider="google"),
+    # Hugging Face popular models
     ModelInfo(id="hf:tiiuae/falcon-7b-instruct", name="Falcon 7B Instruct", provider="huggingface"),
     ModelInfo(id="hf:google/flan-t5-base", name="FLAN-T5 Base", provider="huggingface"),
     ModelInfo(id="hf:facebook/opt-1.3b", name="OPT 1.3B", provider="huggingface"),
@@ -71,7 +98,6 @@ def list_models(q: Optional[str] = None, limit: int = 200):
 def get_conversations(limit: int = 50):
     try:
         items = get_documents("conversation", {}, limit)
-        # Convert ObjectId to string if present
         for it in items:
             if "_id" in it:
                 it["id"] = str(it["_id"])  # mirror to id field for frontend
@@ -104,7 +130,6 @@ def get_conversation_messages(conversation_id: str, limit: int = 200):
             if "_id" in m:
                 m["id"] = str(m["_id"])  # mirror
                 m.pop("_id", None)
-        # Sort by created time if available
         msgs.sort(key=lambda x: x.get("created_at", 0))
         return msgs
     except Exception as e:
@@ -150,35 +175,96 @@ def call_huggingface_generation(model_id: str, prompt: str) -> str:
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=f"HF error: {resp.text[:200]}")
         data = resp.json()
-        # HF returns list of dicts for text-generation
         if isinstance(data, list) and data:
             generated = data[0].get("generated_text") or data[0].get("generated_texts") or ""
             return generated.strip()
-        # Some models return dict with 'generated_text'
         if isinstance(data, dict) and "generated_text" in data:
             return str(data["generated_text"]).strip()
-        # Fallback
         return str(data)[:500]
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail=f"HF request failed: {str(e)}")
 
 
+def call_openai(messages: List[Dict[str, str]], model: str) -> str:
+    if OpenAI is None:
+        raise HTTPException(status_code=500, detail="openai package not installed")
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set in environment")
+    client = OpenAI(api_key=api_key)
+    try:
+        resp = client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=500)
+        return resp.choices[0].message.content or ""
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI error: {str(e)}")
+
+
+def call_anthropic(messages: List[Dict[str, str]], model: str) -> str:
+    if anthropic is None:
+        raise HTTPException(status_code=500, detail="anthropic package not installed")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set in environment")
+    client = anthropic.Anthropic(api_key=api_key)
+    # Map OpenAI-style roles to Anthropic format
+    system = None
+    content_msgs = []
+    for m in messages:
+        if m.get("role") == "system":
+            system = m.get("content")
+        else:
+            content_msgs.append({"role": m.get("role"), "content": m.get("content")})
+    try:
+        resp = client.messages.create(model=model, system=system, messages=content_msgs, max_tokens=500, temperature=0.7)
+        # Anthropics returns a list of content blocks
+        text = "".join([b.text for b in resp.content if getattr(b, "type", "text") == "text"])  # type: ignore
+        return text
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Anthropic error: {str(e)}")
+
+
+def call_google(messages: List[Dict[str, str]], model: str) -> str:
+    if genai is None:
+        raise HTTPException(status_code=500, detail="google-generativeai package not installed")
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not set in environment")
+    genai.configure(api_key=api_key)
+    try:
+        gmodel = genai.GenerativeModel(model)
+        # Convert to the prompt style Gemini expects
+        parts = []
+        system = None
+        for m in messages:
+            role = m.get("role")
+            if role == "system":
+                system = m.get("content")
+            else:
+                parts.append({"role": "user" if role == "user" else "model", "parts": [m.get("content", "")]})
+        chat = gmodel.start_chat(history=[])
+        if system:
+            # prepend system via a prefix
+            parts.insert(0, {"role": "user", "parts": [f"System instruction: {system}"]})
+        resp = chat.send_message(parts)
+        return resp.text or ""
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Google Gemini error: {str(e)}")
+
+
 # -------------------- Chat (non-streaming) --------------------
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest):
-    # Determine model
     model_id = payload.model
 
     # Ensure conversation exists
     conversation_id = payload.conversation_id
     if not conversation_id:
-        # Create new conversation with title from first user message
         first_user = next((m for m in payload.messages if m.role == "user"), None)
         title = (first_user.content[:40] + "...") if first_user else "New Chat"
         conv = Conversation(title=title, model=model_id)
         conversation_id = create_document("conversation", conv)
 
-    # Save incoming messages (only those without id)
+    # Save incoming messages
     try:
         for m in payload.messages:
             if m.role in ("user", "system"):
@@ -187,7 +273,6 @@ def chat(payload: ChatRequest):
         pass
 
     msgs = [m.dict() if hasattr(m, "dict") else (m.model_dump() if hasattr(m, "model_dump") else m) for m in payload.messages]
-    prompt = build_prompt(msgs)
 
     reply_text = ""
     if model_id.startswith("echo:"):
@@ -195,7 +280,17 @@ def chat(payload: ChatRequest):
         reply_text = f"You said: {last_user.content if last_user else ''}"
     elif model_id.startswith("hf:"):
         hf_model = model_id.split("hf:", 1)[1]
+        prompt = build_prompt(msgs)
         reply_text = call_huggingface_generation(hf_model, prompt)
+    elif model_id.startswith("openai:"):
+        oi_model = model_id.split("openai:", 1)[1]
+        reply_text = call_openai(msgs, oi_model)
+    elif model_id.startswith("anthropic:"):
+        an_model = model_id.split("anthropic:", 1)[1]
+        reply_text = call_anthropic(msgs, an_model)
+    elif model_id.startswith("google:"):
+        go_model = model_id.split("google:", 1)[1]
+        reply_text = call_google(msgs, go_model)
     else:
         raise HTTPException(status_code=400, detail="Unknown model provider")
 
@@ -230,70 +325,129 @@ async def chat_stream(request: Request, payload: ChatRequest):
         pass
 
     msgs = [m.dict() if hasattr(m, "dict") else (m.model_dump() if hasattr(m, "model_dump") else m) for m in payload.messages]
-    prompt = build_prompt(msgs)
 
-    async def event_generator():
-        # Send meta event first
+    async def provider_stream() -> AsyncGenerator[str, None]:
+        # Send meta
         yield f"event: meta\ndata: {{\"conversation_id\": \"{conversation_id}\", \"model\": \"{model_id}\"}}\n\n"
 
-        # Generate reply
-        if model_id.startswith("echo:"):
-            last_user = next((m for m in reversed(payload.messages) if m.role == "user"), None)
-            full = f"You said: {last_user.content if last_user else ''}"
-            # stream token-by-token
-            for ch in full:
-                yield f"event: token\ndata: {ch}\n\n"
-        elif model_id.startswith("hf:"):
-            hf_model = model_id.split("hf:", 1)[1]
-            try:
-                text = call_huggingface_generation(hf_model, prompt)
-            except HTTPException as e:
-                # stream the error as a final message
-                err = f"Error: {e.detail}"
-                for ch in err:
+        # Providers
+        text = ""
+        try:
+            if model_id.startswith("echo:"):
+                last_user = next((m for m in reversed(payload.messages) if m.role == "user"), None)
+                text = f"You said: {last_user.content if last_user else ''}"
+                for ch in text:
                     yield f"event: token\ndata: {ch}\n\n"
-                text = err
-            # simulate streaming in chunks of ~20 chars
-            chunk = 20
-            for i in range(0, len(text), chunk):
-                segment = text[i : i + chunk]
-                yield f"event: token\ndata: {segment}\n\n"
-        else:
-            yield "event: token\ndata: Unknown model provider\n\n"
+            elif model_id.startswith("hf:"):
+                prompt = build_prompt(msgs)
+                hf_model = model_id.split("hf:", 1)[1]
+                text = call_huggingface_generation(hf_model, prompt)
+                chunk = 32
+                for i in range(0, len(text), chunk):
+                    yield f"event: token\ndata: {text[i:i+chunk]}\n\n"
+            elif model_id.startswith("openai:"):
+                oi_model = model_id.split("openai:", 1)[1]
+                if OpenAI is None:
+                    raise HTTPException(status_code=500, detail="openai package not installed")
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set in environment")
+                client = OpenAI(api_key=api_key)
+                try:
+                    stream = client.chat.completions.create(model=oi_model, messages=msgs, temperature=0.7, max_tokens=500, stream=True)
+                    collected = []
+                    for event in stream:  # type: ignore
+                        delta = event.choices[0].delta.content or ""
+                        if delta:
+                            collected.append(delta)
+                            yield f"event: token\ndata: {delta}\n\n"
+                    text = "".join(collected)
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"OpenAI stream error: {str(e)}")
+            elif model_id.startswith("anthropic:"):
+                an_model = model_id.split("anthropic:", 1)[1]
+                if anthropic is None:
+                    raise HTTPException(status_code=500, detail="anthropic package not installed")
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if not api_key:
+                    raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set in environment")
+                client = anthropic.Anthropic(api_key=api_key)
+                system = None
+                content_msgs = []
+                for m in msgs:
+                    if m.get("role") == "system":
+                        system = m.get("content")
+                    else:
+                        content_msgs.append({"role": m.get("role"), "content": m.get("content")})
+                with client.messages.stream(model=an_model, system=system, messages=content_msgs, max_tokens=500, temperature=0.7) as stream:  # type: ignore
+                    collected = []
+                    for event in stream:
+                        if event.type == "content_block_delta":
+                            delta = event.delta.get("text", "")
+                            if delta:
+                                collected.append(delta)
+                                yield f"event: token\ndata: {delta}\n\n"
+                    text = "".join(collected)
+            elif model_id.startswith("google:"):
+                go_model = model_id.split("google:", 1)[1]
+                if genai is None:
+                    raise HTTPException(status_code=500, detail="google-generativeai package not installed")
+                api_key = os.getenv("GOOGLE_API_KEY")
+                if not api_key:
+                    raise HTTPException(status_code=500, detail="GOOGLE_API_KEY not set in environment")
+                genai.configure(api_key=api_key)
+                gmodel = genai.GenerativeModel(go_model)
+                system = None
+                parts = []
+                for m in msgs:
+                    role = m.get("role")
+                    if role == "system":
+                        system = m.get("content")
+                    else:
+                        parts.append({"role": "user" if role == "user" else "model", "parts": [m.get("content", "")]})
+                if system:
+                    parts.insert(0, {"role": "user", "parts": [f"System instruction: {system}"]})
+                # Gemini doesn't expose SSE directly via SDK in python; stream via generate_content with stream=True
+                try:
+                    stream = gmodel.generate_content(parts, stream=True)
+                    collected = []
+                    for chunk in stream:
+                        if hasattr(chunk, "text") and chunk.text:
+                            collected.append(chunk.text)
+                            yield f"event: token\ndata: {chunk.text}\n\n"
+                    text = "".join(collected)
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Google stream error: {str(e)}")
+            else:
+                text = "Unknown model provider"
+                yield f"event: token\ndata: {text}\n\n"
+        except HTTPException as e:
+            err = f"Error: {e.detail}"
+            for ch in err:
+                yield f"event: token\ndata: {ch}\n\n"
+            text = err
+        except Exception as e:
+            err = f"Error: {str(e)}"
+            for ch in err:
+                yield f"event: token\ndata: {ch}\n\n"
+            text = err
 
         # done event
         yield f"event: done\ndata: {{\"conversation_id\": \"{conversation_id}\"}}\n\n"
 
-    async def finalize_save(full_text: str):
+        # Persist full text after completion
         try:
-            reply_message = Message(conversation_id=conversation_id, role="assistant", content=full_text)
+            reply_message = Message(conversation_id=conversation_id, role="assistant", content=text)
             create_document("message", reply_message)
         except Exception:
             pass
 
-    # Wrap the generator and also capture full text for persistence
-    async def wrapped_stream():
-        full = []
-        async for chunk in event_generator():
-            if chunk.startswith("event: token"):
-                # extract data after 'data: '
-                try:
-                    data_line = chunk.split("\n")[1]
-                    if data_line.startswith("data: "):
-                        full.append(data_line[len("data: "):])
-                except Exception:
-                    pass
-            yield chunk
-        # After streaming completes, persist the message
-        await finalize_save("".join(full))
-
-    return StreamingResponse(wrapped_stream(), media_type="text/event-stream")
+    return StreamingResponse(provider_stream(), media_type="text/event-stream")
 
 
 # -------------------- Infra Test --------------------
 @app.get("/test")
 def test_database():
-    """Test endpoint to check if database is available and accessible"""
     response = {
         "backend": "✅ Running",
         "database": "❌ Not Available",
