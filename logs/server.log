@@ -1,19 +1,19 @@
 INFO:     Will watch for changes in these directories: ['/home/workspace']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [154] using StatReload
-INFO:     Started server process [156]
+INFO:     Started reloader process [241] using StatReload
+INFO:     Started server process [243]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     172.20.0.1:57092 - "HEAD / HTTP/1.1" 405 Method Not Allowed
-INFO:     172.20.0.1:57112 - "GET /api/models HTTP/1.1" 200 OK
-INFO:     172.20.0.1:57112 - "GET /api/models HTTP/1.1" 200 OK
-INFO:     172.20.0.1:57106 - "GET /api/conversations HTTP/1.1" 200 OK
-INFO:     172.20.0.1:57106 - "GET /api/conversations HTTP/1.1" 200 OK
-INFO:     172.20.0.1:57128 - "GET /api/conversations HTTP/1.1" 200 OK
-INFO:     172.20.0.1:57128 - "GET /api/models HTTP/1.1" 200 OK
-INFO:     172.20.0.1:57128 - "GET /api/models HTTP/1.1" 200 OK
-INFO:     172.20.0.1:34558 - "GET /api/conversations HTTP/1.1" 200 OK
-INFO:     172.20.0.1:43774 - "GET /api/models HTTP/1.1" 200 OK
-INFO:     172.20.0.1:43760 - "GET /api/conversations HTTP/1.1" 200 OK
-INFO:     172.20.0.1:43774 - "GET /api/models HTTP/1.1" 200 OK
-INFO:     172.20.0.1:43778 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51728 - "HEAD / HTTP/1.1" 405 Method Not Allowed
+INFO:     172.20.0.1:51740 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51766 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51768 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51766 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51736 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51754 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51736 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:51754 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:37498 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:37504 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     172.20.0.1:37498 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     172.20.0.1:37504 - "GET /api/models HTTP/1.1" 200 OK
