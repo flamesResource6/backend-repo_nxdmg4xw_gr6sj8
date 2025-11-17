@@ -56,6 +56,7 @@ class Message(BaseModel):
     conversation_id: str = Field(..., description="Associated conversation id (string)")
     role: str = Field(..., description="Role of the message: user|assistant|system")
     content: str = Field(..., description="Message content")
+    image_url: Optional[str] = Field(None, description="Optional image URL to send alongside the text (for multimodal models)")
 
 class ChatRequest(BaseModel):
     model: str = Field(..., description="Model identifier, e.g. echo:mini or hf:tiiuae/falcon-7b-instruct")

@@ -58,17 +58,17 @@ class ModelInfo(BaseModel):
 # Expanded catalog across providers
 MODEL_REGISTRY: List[ModelInfo] = [
     ModelInfo(id="echo:mini", name="Echo Mini (Demo)", provider="demo", description="Replies with what you say (for testing)."),
-    # OpenAI
-    ModelInfo(id="openai:gpt-4o", name="GPT-4o", provider="openai"),
-    ModelInfo(id="openai:gpt-4o-mini", name="GPT-4o Mini", provider="openai"),
+    # OpenAI (multimodal-capable models highlighted)
+    ModelInfo(id="openai:gpt-4o", name="GPT-4o (Multimodal)", provider="openai"),
+    ModelInfo(id="openai:gpt-4o-mini", name="GPT-4o Mini (Multimodal)", provider="openai"),
     ModelInfo(id="openai:gpt-4.1", name="GPT-4.1", provider="openai"),
     # Anthropic
     ModelInfo(id="anthropic:claude-3-5-sonnet-20240620", name="Claude 3.5 Sonnet", provider="anthropic"),
     ModelInfo(id="anthropic:claude-3-opus-20240229", name="Claude 3 Opus", provider="anthropic"),
     ModelInfo(id="anthropic:claude-3-haiku-20240307", name="Claude 3 Haiku", provider="anthropic"),
-    # Google Gemini
-    ModelInfo(id="google:gemini-1.5-pro", name="Gemini 1.5 Pro", provider="google"),
-    ModelInfo(id="google:gemini-1.5-flash", name="Gemini 1.5 Flash", provider="google"),
+    # Google Gemini (multimodal)
+    ModelInfo(id="google:gemini-1.5-pro", name="Gemini 1.5 Pro (Multimodal)", provider="google"),
+    ModelInfo(id="google:gemini-1.5-flash", name="Gemini 1.5 Flash (Multimodal)", provider="google"),
     # Hugging Face popular models
     ModelInfo(id="hf:tiiuae/falcon-7b-instruct", name="Falcon 7B Instruct", provider="huggingface"),
     ModelInfo(id="hf:google/flan-t5-base", name="FLAN-T5 Base", provider="huggingface"),
@@ -185,6 +185,24 @@ def call_huggingface_generation(model_id: str, prompt: str) -> str:
         raise HTTPException(status_code=500, detail=f"HF request failed: {str(e)}")
 
 
+def openai_convert_messages(messages: List[Dict[str, str]]):
+    # Convert messages to OpenAI chat format with optional image_url parts
+    converted = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        image_url = m.get("image_url")
+        if image_url:
+            content_parts = [
+                {"type": "text", "text": content or ""},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ]
+            converted.append({"role": role, "content": content_parts})
+        else:
+            converted.append({"role": role, "content": content})
+    return converted
+
+
 def call_openai(messages: List[Dict[str, str]], model: str) -> str:
     if OpenAI is None:
         raise HTTPException(status_code=500, detail="openai package not installed")
@@ -193,7 +211,8 @@ def call_openai(messages: List[Dict[str, str]], model: str) -> str:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set in environment")
     client = OpenAI(api_key=api_key)
     try:
-        resp = client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=500)
+        oa_messages = openai_convert_messages(messages)
+        resp = client.chat.completions.create(model=model, messages=oa_messages, temperature=0.7, max_tokens=500)
         return resp.choices[0].message.content or ""
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI error: {str(e)}")
@@ -237,13 +256,20 @@ def call_google(messages: List[Dict[str, str]], model: str) -> str:
         system = None
         for m in messages:
             role = m.get("role")
+            img = m.get("image_url")
+            txt = m.get("content", "")
             if role == "system":
-                system = m.get("content")
+                system = txt
             else:
-                parts.append({"role": "user" if role == "user" else "model", "parts": [m.get("content", "")]})
+                role_map = "user" if role == "user" else "model"
+                role_parts = []
+                if txt:
+                    role_parts.append(txt)
+                if img:
+                    role_parts.append({"mime_type": "image/jpeg", "file_uri": img})
+                parts.append({"role": role_map, "parts": role_parts})
         chat = gmodel.start_chat(history=[])
         if system:
-            # prepend system via a prefix
             parts.insert(0, {"role": "user", "parts": [f"System instruction: {system}"]})
         resp = chat.send_message(parts)
         return resp.text or ""
@@ -354,7 +380,8 @@ async def chat_stream(request: Request, payload: ChatRequest):
                     raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set in environment")
                 client = OpenAI(api_key=api_key)
                 try:
-                    stream = client.chat.completions.create(model=oi_model, messages=msgs, temperature=0.7, max_tokens=500, stream=True)
+                    oa_messages = openai_convert_messages(msgs)
+                    stream = client.chat.completions.create(model=oi_model, messages=oa_messages, temperature=0.7, max_tokens=500, stream=True)
                     collected = []
                     for event in stream:  # type: ignore
                         delta = event.choices[0].delta.content or ""
@@ -404,7 +431,14 @@ async def chat_stream(request: Request, payload: ChatRequest):
                     if role == "system":
                         system = m.get("content")
                     else:
-                        parts.append({"role": "user" if role == "user" else "model", "parts": [m.get("content", "")]})
+                        img = m.get("image_url")
+                        txt = m.get("content", "")
+                        role_parts = []
+                        if txt:
+                            role_parts.append(txt)
+                        if img:
+                            role_parts.append({"mime_type": "image/jpeg", "file_uri": img})
+                        parts.append({"role": "user" if role == "user" else "model", "parts": role_parts})
                 if system:
                     parts.insert(0, {"role": "user", "parts": [f"System instruction: {system}"]})
                 # Gemini doesn't expose SSE directly via SDK in python; stream via generate_content with stream=True
